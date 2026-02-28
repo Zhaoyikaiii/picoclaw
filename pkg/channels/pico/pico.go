@@ -50,12 +50,14 @@ func (pc *picoConn) close() {
 // It serves as the reference implementation for all optional capability interfaces.
 type PicoChannel struct {
 	*channels.BaseChannel
-	config      config.PicoConfig
-	upgrader    websocket.Upgrader
-	connections sync.Map // connID → *picoConn
-	connCount   atomic.Int32
-	ctx         context.Context
-	cancel      context.CancelFunc
+	config             config.PicoConfig
+	upgrader           websocket.Upgrader
+	connections        sync.Map // connID → *picoConn
+	connCount          atomic.Int32
+	ctx                context.Context
+	cancel             context.CancelFunc
+	nodeRequestHandler func(payload map[string]any) (map[string]any, error)
+	nodeValidator      func(sourceNodeID string) bool // validates source is a known swarm member
 }
 
 // NewPicoChannel creates a new Pico Protocol channel.
@@ -403,6 +405,9 @@ func (c *PicoChannel) handleMessage(pc *picoConn, msg PicoMessage) {
 	case TypeMessageSend:
 		c.handleMessageSend(pc, msg)
 
+	case TypeNodeRequest:
+		c.handleNodeRequest(pc, msg)
+
 	default:
 		errMsg := newError("unknown_type", fmt.Sprintf("unknown message type: %s", msg.Type))
 		pc.writeJSON(errMsg)
@@ -450,6 +455,119 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 	}
 
 	c.HandleMessage(c.ctx, peer, msg.ID, senderID, chatID, content, nil, metadata, sender)
+}
+
+// SetNodeRequestHandler sets the handler for incoming inter-node request messages.
+// The handler receives the full payload map and returns a reply payload map.
+func (c *PicoChannel) SetNodeRequestHandler(handler func(payload map[string]any) (map[string]any, error)) {
+	c.nodeRequestHandler = handler
+}
+
+// SetNodeValidator sets a function that validates whether a source_node_id
+// is a known, alive member of the swarm cluster. This prevents arbitrary
+// WebSocket clients from issuing node.request messages even if they hold
+// a valid Pico token.
+func (c *PicoChannel) SetNodeValidator(validator func(sourceNodeID string) bool) {
+	c.nodeValidator = validator
+}
+
+// handleNodeRequest processes an incoming node.request message from a swarm peer.
+//
+// Security model:
+//   - The WebSocket connection is already authenticated via Pico token.
+//   - If a nodeValidator is set, source_node_id MUST be a known alive swarm member.
+//     This prevents non-swarm WS clients from reaching inter-node control plane.
+//   - For production, also configure NATS-level ACLs as the primary trust boundary;
+//     this Pico path is a secondary/legacy channel.
+func (c *PicoChannel) handleNodeRequest(pc *picoConn, msg PicoMessage) {
+	requestID, _ := msg.Payload["request_id"].(string)
+	sourceNodeID, _ := msg.Payload["source_node_id"].(string)
+	action, _ := msg.Payload["action"].(string)
+
+	logger.InfoCF("pico", "Received node request", map[string]any{
+		"request_id":     requestID,
+		"source_node_id": sourceNodeID,
+		"action":         action,
+	})
+
+	// Validate source node identity against swarm membership.
+	if c.nodeValidator != nil && !c.nodeValidator(sourceNodeID) {
+		logger.WarnCF("pico", "Rejected node request from unknown/dead node", map[string]any{
+			"request_id":     requestID,
+			"source_node_id": sourceNodeID,
+		})
+		reply := newMessage(TypeNodeReply, map[string]any{
+			"request_id": requestID,
+			"error":      "source node not recognized as a cluster member",
+		})
+		reply.ID = msg.ID
+		_ = pc.writeJSON(reply)
+		return
+	}
+
+	var replyPayload map[string]any
+
+	if c.nodeRequestHandler == nil {
+		replyPayload = map[string]any{
+			"request_id": requestID,
+			"error":      "no node request handler registered",
+		}
+	} else {
+		// Start watchdog goroutine to send processing heartbeats
+		stopHeartbeat := make(chan struct{})
+		go c.watchDog(pc, msg.ID, requestID, stopHeartbeat)
+
+		// Call the handler and stop heartbeat when done
+		var err error
+		replyPayload, err = c.nodeRequestHandler(msg.Payload)
+		close(stopHeartbeat)
+
+		if err != nil {
+			replyPayload = map[string]any{
+				"request_id": requestID,
+				"error":      err.Error(),
+			}
+		}
+		// Ensure request_id is always in the reply
+		if replyPayload != nil {
+			replyPayload["request_id"] = requestID
+		}
+	}
+
+	reply := newMessage(TypeNodeReply, replyPayload)
+	reply.ID = msg.ID
+	if err := pc.writeJSON(reply); err != nil {
+		logger.ErrorCF("pico", "Failed to send node reply", map[string]any{
+			"error":      err.Error(),
+			"request_id": requestID,
+		})
+	}
+}
+
+// watchDog sends periodic processing heartbeats to keep the connection alive
+// while a long-running node request is being handled. It stops when the
+// stopHeartbeat channel is closed.
+func (c *PicoChannel) watchDog(pc *picoConn, msgID, requestID string, stop <-chan struct{}) {
+	ticker := time.NewTicker(nodeHeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			heartbeat := newMessage(TypeNodeProcessing, map[string]any{
+				"request_id": requestID,
+			})
+			heartbeat.ID = msgID
+			if err := pc.writeJSON(heartbeat); err != nil {
+				logger.DebugCF("pico", "Failed to send processing heartbeat", map[string]any{
+					"error":      err.Error(),
+					"request_id": requestID,
+				})
+				// Don't return - keep trying until stop is closed
+			}
+		}
+	}
 }
 
 // truncate truncates a string to maxLen runes.

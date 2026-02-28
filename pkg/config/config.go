@@ -58,6 +58,7 @@ type Config struct {
 	Tools     ToolsConfig     `json:"tools"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"`
 	Devices   DevicesConfig   `json:"devices"`
+	Swarm     SwarmConfig     `json:"swarm,omitempty"` // Swarm mode configuration
 }
 
 // MarshalJSON implements custom JSON marshaling for Config
@@ -899,4 +900,135 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 	default:
 		return true
 	}
+}
+
+// SwarmConfig contains configuration for swarm mode.
+type SwarmConfig struct {
+	// Enabled enables swarm mode.
+	Enabled bool `json:"enabled" env:"PICOCLAW_SWARM_ENABLED"`
+
+	// NodeID is the unique identifier for this node.
+	NodeID string `json:"node_id,omitempty" env:"PICOCLAW_SWARM_NODE_ID"`
+
+	// Discovery configuration for NATS-based node discovery.
+	Discovery SwarmDiscoveryConfig `json:"discovery"`
+
+	// Handoff configuration for task handoff.
+	Handoff SwarmHandoffConfig `json:"handoff"`
+
+	// LoadMonitor configuration for load monitoring.
+	LoadMonitor SwarmLoadMonitorConfig `json:"load_monitor"`
+
+	// LeaderElection configuration for leader election.
+	LeaderElection SwarmLeaderElectionConfig `json:"leader_election"`
+}
+
+// SwarmDiscoveryConfig contains configuration for NATS-based node discovery.
+type SwarmDiscoveryConfig struct {
+	// NATSURL is the NATS server URL (required).
+	NATSURL string `json:"nats_url,omitempty" env:"PICOCLAW_SWARM_NATS_URL"`
+
+	// NATSCredsFile is the path to NATS credentials file (NKeys/JWT auth).
+	NATSCredsFile string `json:"nats_creds_file,omitempty"`
+
+	// NATSTLSCert is the path to the client TLS certificate for mTLS.
+	NATSTLSCert string `json:"nats_tls_cert,omitempty"`
+
+	// NATSTLSKey is the path to the client TLS key for mTLS.
+	NATSTLSKey string `json:"nats_tls_key,omitempty"`
+
+	// NATSTLSCACert is the path to the CA certificate for TLS verification.
+	NATSTLSCACert string `json:"nats_tls_ca_cert,omitempty"`
+
+	// HeartbeatInterval controls how often the node renews its KV entry (in seconds).
+	HeartbeatInterval int `json:"heartbeat_interval,omitempty"`
+
+	// MemberTTL is the TTL for member entries in the KV bucket (in seconds).
+	MemberTTL int `json:"member_ttl,omitempty"`
+
+	// SubjectPrefix overrides the default "picoclaw.swarm" subject prefix.
+	SubjectPrefix string `json:"subject_prefix,omitempty"`
+
+	// NodeTimeout is the timeout before marking a node as suspect (in seconds).
+	NodeTimeout int `json:"node_timeout,omitempty"`
+
+	// DeadNodeTimeout is the timeout before marking a node as dead (in seconds).
+	DeadNodeTimeout int `json:"dead_node_timeout,omitempty"`
+}
+
+// SwarmHandoffConfig contains configuration for task handoff.
+type SwarmHandoffConfig struct {
+	// Enabled enables task handoff.
+	Enabled bool `json:"enabled"`
+
+	// LoadThreshold is the load score threshold (0-1) above which
+	// tasks will be handed off to other nodes.
+	LoadThreshold float64 `json:"load_threshold,omitempty"`
+
+	// Timeout is the timeout for a handoff operation (in seconds).
+	Timeout int `json:"timeout,omitempty"`
+
+	// MaxRetries is the maximum number of retries for handoff.
+	MaxRetries int `json:"max_retries,omitempty"`
+
+	// RetryDelay is the delay between retries (in seconds).
+	RetryDelay int `json:"retry_delay,omitempty"`
+
+	// RequestTimeout is the timeout for a single NATS handoff request-reply (in seconds).
+	RequestTimeout int `json:"request_timeout,omitempty"`
+
+	// SharedSecret is the HMAC secret for message signing (base64 encoded or raw string).
+	// If empty, signing is disabled (NOT RECOMMENDED for production).
+	SharedSecret string `json:"shared_secret,omitempty" env:"PICOCLAW_SWARM_SHARED_SECRET"`
+
+	// EncryptionKey is the AES-256 key for encrypting session data (base64 encoded or raw string).
+	// Must be 32 bytes when decoded. If empty, encryption is disabled.
+	EncryptionKey string `json:"encryption_key,omitempty" env:"PICOCLAW_SWARM_ENCRYPTION_KEY"`
+
+	// RequireAuth enables strict authentication - reject unsigned messages.
+	RequireAuth bool `json:"require_auth"`
+
+	// RequireEncryption enables strict encryption - reject unencrypted session data.
+	RequireEncryption bool `json:"require_encryption"`
+}
+
+// SwarmLoadMonitorConfig contains configuration for load monitoring.
+type SwarmLoadMonitorConfig struct {
+	// Enabled enables load monitoring.
+	Enabled bool `json:"enabled"`
+
+	// Interval is the interval between load samples (in seconds).
+	Interval int `json:"interval,omitempty"`
+
+	// SampleSize is the number of samples to keep for averaging.
+	SampleSize int `json:"sample_size,omitempty"`
+
+	// CPUWeight is the weight for CPU usage in load score (0-1).
+	CPUWeight float64 `json:"cpu_weight,omitempty"`
+
+	// MemoryWeight is the weight for memory usage in load score (0-1).
+	MemoryWeight float64 `json:"memory_weight,omitempty"`
+
+	// SessionWeight is the weight for active sessions in load score (0-1).
+	SessionWeight float64 `json:"session_weight,omitempty"`
+
+	// RoutingRejectThreshold is the load score above which routing requests are rejected (0-1).
+	// Provides hysteresis to prevent oscillation. Default: 0.9
+	RoutingRejectThreshold float64 `json:"routing_reject_threshold,omitempty"`
+
+	// RoutingAcceptThreshold is the load score below which routing requests are accepted (0-1).
+	// Once rejected, load must drop below this to accept again. Default: 0.75
+	RoutingAcceptThreshold float64 `json:"routing_accept_threshold,omitempty"`
+}
+
+// SwarmLeaderElectionConfig contains configuration for leader election.
+type SwarmLeaderElectionConfig struct {
+	// Enabled enables leader election.
+	Enabled bool `json:"enabled"`
+
+	// LockTTL is how long the leader lock lives without renewal (in seconds).
+	LockTTL int `json:"lock_ttl,omitempty"`
+
+	// RenewalInterval is how often the leader renews its lock (in seconds).
+	RenewalInterval int `json:"renewal_interval,omitempty"`
 }

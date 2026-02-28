@@ -39,13 +39,13 @@ import (
 	"github.com/sipeed/picoclaw/pkg/voice"
 )
 
-func gatewayCmd(debug bool) error {
+func gatewayCmd(debug bool, configPath string) error {
 	if debug {
 		logger.SetLevel(logger.DEBUG)
 		fmt.Println("🔍 Debug mode enabled")
 	}
 
-	cfg, err := internal.LoadConfig()
+	cfg, err := loadConfigWithPath(configPath)
 	if err != nil {
 		return fmt.Errorf("error loading config: %w", err)
 	}
@@ -251,4 +251,13 @@ func setupCronTool(
 	}
 
 	return cronService
+}
+
+func loadConfigWithPath(configPath string) (*config.Config, error) {
+	path := configPath
+	if path == "" {
+		path = internal.GetConfigPath()
+	}
+	fmt.Printf("📁 Loading config from: %s\n", path)
+	return config.LoadConfig(path)
 }

@@ -1,46 +1,59 @@
+// Package pico provides the Pico Protocol WebSocket channel implementation.
+// This file contains the local PicoMessage type wrapper for compatibility with
+// the canonical protocol definitions in pkg/pico/protocol.
 package pico
 
-import "time"
+import (
+	"time"
 
-// Protocol message types.
-const (
-	// TypeMessageSend is sent from client to server.
-	TypeMessageSend = "message.send"
-	TypeMediaSend   = "media.send"
-	TypePing        = "ping"
-
-	// TypeMessageCreate is sent from server to client.
-	TypeMessageCreate = "message.create"
-	TypeMessageUpdate = "message.update"
-	TypeMediaCreate   = "media.create"
-	TypeTypingStart   = "typing.start"
-	TypeTypingStop    = "typing.stop"
-	TypeError         = "error"
-	TypePong          = "pong"
+	picoproto "github.com/sipeed/picoclaw/pkg/pico/protocol"
 )
 
+// nodeHeartbeatInterval is the interval between processing heartbeats sent
+// during long-running node requests to keep the connection alive.
+const nodeHeartbeatInterval = 15 * time.Second
+
 // PicoMessage is the wire format for all Pico Protocol messages.
-type PicoMessage struct {
-	Type      string         `json:"type"`
-	ID        string         `json:"id,omitempty"`
-	SessionID string         `json:"session_id,omitempty"`
-	Timestamp int64          `json:"timestamp,omitempty"`
-	Payload   map[string]any `json:"payload,omitempty"`
-}
+// This is a local type alias for the canonical protocol.Message type.
+type PicoMessage = picoproto.Message
 
 // newMessage creates a PicoMessage with the given type and payload.
 func newMessage(msgType string, payload map[string]any) PicoMessage {
-	return PicoMessage{
-		Type:      msgType,
-		Timestamp: time.Now().UnixMilli(),
-		Payload:   payload,
-	}
+	return picoproto.NewMessage(msgType, payload)
 }
 
 // newError creates an error PicoMessage.
 func newError(code, message string) PicoMessage {
-	return newMessage(TypeError, map[string]any{
-		"code":    code,
-		"message": message,
-	})
+	return picoproto.NewError(code, message)
+}
+
+// Message type constants re-exported from pkg/pico/protocol for convenience.
+// The canonical definitions are in pkg/pico/protocol/protocol.go.
+const (
+	TypeMessageSend    = picoproto.TypeMessageSend
+	TypeMediaSend      = picoproto.TypeMediaSend
+	TypePing           = picoproto.TypePing
+	TypeMessageCreate  = picoproto.TypeMessageCreate
+	TypeMessageUpdate  = picoproto.TypeMessageUpdate
+	TypeMediaCreate    = picoproto.TypeMediaCreate
+	TypeTypingStart    = picoproto.TypeTypingStart
+	TypeTypingStop     = picoproto.TypeTypingStop
+	TypeError          = picoproto.TypeError
+	TypePong           = picoproto.TypePong
+	TypeNodeRequest    = picoproto.TypeNodeRequest
+	TypeNodeReply      = picoproto.TypeNodeReply
+	TypeNodeProcessing = picoproto.TypeNodeProcessing
+)
+
+// Ensure PicoMessage matches protocol.Message at compile time.
+var _ = func() struct{} {
+	// Type alias compatibility check
+	type _ = picoproto.Message
+	type _ = PicoMessage
+	return struct{}{}
+}()
+
+// PicoMessageTimestamp returns the current timestamp for Pico messages.
+func PicoMessageTimestamp() int64 {
+	return time.Now().UnixMilli()
 }

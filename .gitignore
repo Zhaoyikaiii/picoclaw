@@ -47,3 +47,7 @@ dist/
 
 # Windows Application Icon/Resource
 *.syso
+
+# PM2 and process manager configs (dev-specific)
+ecosystem.config.js
+.pm2/
