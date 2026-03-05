@@ -115,12 +115,29 @@ func (r *ToolRegistry) ExecuteWithContext(
 			ToolArgs:   args,
 			ToolOutput: result.ForLLM,
 			ToolError:  result.IsError,
+			ToolAsync:  result.Async,
 			Channel:    channel,
 			ChatID:     chatID,
 		})
 		if injected != "" {
 			result.ForLLM = result.ForLLM + "\n\n[Hook Output]\n" + injected
 		}
+	}
+
+	// OnError hook: fires only when tool execution resulted in an error.
+	// This is a dedicated event for error-specific workflows (alerting,
+	// auditing, auto-remediation) without needing to check tool_error
+	// in PostToolUse hooks.
+	if result.IsError && r.hooks != nil && r.hooks.HasHooks(hooks.OnError) {
+		r.hooks.Trigger(ctx, hooks.OnError, hooks.HookPayload{
+			ToolName:   name,
+			ToolArgs:   args,
+			ToolOutput: result.ForLLM,
+			ToolError:  true,
+			ToolAsync:  result.Async,
+			Channel:    channel,
+			ChatID:     chatID,
+		})
 	}
 
 	// Log based on result type

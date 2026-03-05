@@ -79,23 +79,26 @@ func NewAgentLoop(
 	cooldown := providers.NewCooldownTracker()
 	fallbackChain := providers.NewFallbackChain(cooldown)
 
-	// Initialize hook manager from config
+	// Initialize hook manager from config (only when explicitly enabled)
 	var hookManager *hooks.HookManager
-	hookRules := convertHooksConfig(cfg.Hooks)
-	if len(hookRules) > 0 {
-		hookManager = hooks.NewHookManager(hookRules)
-		logger.InfoCF("agent", "Hook manager initialized",
-			map[string]any{
-				"pre_message":  len(hookRules[hooks.PreMessage]),
-				"post_message": len(hookRules[hooks.PostMessage]),
-				"pre_tool":     len(hookRules[hooks.PreToolUse]),
-				"post_tool":    len(hookRules[hooks.PostToolUse]),
-			})
+	if cfg.Hooks.Enabled {
+		hookRules := convertHooksConfig(cfg.Hooks)
+		if len(hookRules) > 0 {
+			hookManager = hooks.NewHookManager(hookRules)
+			logger.InfoCF("agent", "Hook manager initialized",
+				map[string]any{
+					"pre_message":  len(hookRules[hooks.PreMessage]),
+					"post_message": len(hookRules[hooks.PostMessage]),
+					"pre_tool":     len(hookRules[hooks.PreToolUse]),
+					"post_tool":    len(hookRules[hooks.PostToolUse]),
+					"on_error":     len(hookRules[hooks.OnError]),
+				})
 
-		// Inject hook manager into all agent tool registries
-		for _, agentID := range registry.ListAgentIDs() {
-			if agent, ok := registry.GetAgent(agentID); ok {
-				agent.Tools.SetHookManager(hookManager)
+			// Inject hook manager into all agent tool registries
+			for _, agentID := range registry.ListAgentIDs() {
+				if agent, ok := registry.GetAgent(agentID); ok {
+					agent.Tools.SetHookManager(hookManager)
+				}
 			}
 		}
 	}
@@ -136,6 +139,7 @@ func convertHooksConfig(cfg config.HooksConfig) map[hooks.Event][]hooks.HookRule
 	convert(hooks.PostMessage, cfg.PostMessage)
 	convert(hooks.PreToolUse, cfg.PreToolUse)
 	convert(hooks.PostToolUse, cfg.PostToolUse)
+	convert(hooks.OnError, cfg.OnError)
 
 	return rules
 }
@@ -705,7 +709,10 @@ func (al *AgentLoop) runAgentLoop(
 		}
 	}
 
-	// 1. PreMessage hook: inject context before building messages
+	// 1. PreMessage hook: inject context before building messages.
+	// We start with the raw user message and append any hook-injected context.
+	// Only the final (possibly augmented) userMessage is passed to BuildMessages
+	// as its single "currentMessage" parameter — no duplication occurs.
 	userMessage := opts.UserMessage
 	if al.hookManager != nil && al.hookManager.HasHooks(hooks.PreMessage) {
 		injected := al.hookManager.CollectInjectedOutput(ctx, hooks.PreMessage, hooks.HookPayload{

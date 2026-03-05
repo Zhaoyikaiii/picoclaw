@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -23,6 +24,46 @@ const (
 	// MaxOutputBytes is the maximum bytes captured from hook stdout.
 	MaxOutputBytes = 64 * 1024 // 64KB
 )
+
+// dangerousCmdPatterns blocks destructive/dangerous commands from running
+// as hook scripts. These patterns are checked against the lowercased command
+// string before execution. The list mirrors the safety patterns used by the
+// exec tool (pkg/tools/shell.go) but is defined here to avoid circular imports.
+//
+// Hooks are user-configured (not LLM-generated), so this is defense-in-depth:
+// protecting against typos, copy-paste accidents, and config file corruption.
+var dangerousCmdPatterns = []*regexp.Regexp{
+	// Destructive file operations
+	regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
+	regexp.MustCompile(`\bdel\s+/[fq]\b`),
+	regexp.MustCompile(`\brmdir\s+/s\b`),
+
+	// Disk wiping / formatting
+	regexp.MustCompile(`\b(format|mkfs|diskpart)\b[.\s]`),
+	regexp.MustCompile(`\bdd\s+if=`),
+	regexp.MustCompile(
+		`>\s*/dev/(sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|loop\d|dm-\d|md\d|sr\d|nbd\d)`,
+	),
+
+	// System control
+	regexp.MustCompile(`\b(shutdown|reboot|poweroff)\b`),
+
+	// Fork bombs
+	regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
+
+	// Privilege escalation
+	regexp.MustCompile(`\bsudo\b`),
+	regexp.MustCompile(`\bchmod\s+[0-7]{3,4}\b`),
+	regexp.MustCompile(`\bchown\b`),
+
+	// Remote code execution via pipe
+	regexp.MustCompile(`\bcurl\b.*\|\s*(sh|bash)`),
+	regexp.MustCompile(`\bwget\b.*\|\s*(sh|bash)`),
+
+	// Piped shell execution
+	regexp.MustCompile(`\|\s*sh\b`),
+	regexp.MustCompile(`\|\s*bash\b`),
+}
 
 // Executor runs hook commands via os/exec.
 type Executor struct {
@@ -46,8 +87,18 @@ func (e *Executor) Run(ctx context.Context, command string, stdinData []byte, ex
 		return HookResult{Err: fmt.Errorf("empty hook command")}
 	}
 
-	// Expand ~ in command path
-	command = expandHome(command)
+	// Safety guard: block obviously dangerous commands.
+	// Hook commands are user-configured, so this is defense-in-depth.
+	if reason := guardCommand(command); reason != "" {
+		return HookResult{Err: fmt.Errorf("hook command blocked: %s", reason)}
+	}
+
+	// Note: ~ expansion is intentionally left to the shell.
+	// On Unix, sh -c handles ~ natively in all positions.
+	// On Windows, PowerShell also expands ~ (resolves to $HOME).
+	// Go-side expansion would only cover the leading ~ case, miss mid-command
+	// occurrences (e.g. "python3 ~/.picoclaw/hook.py"), and require separate
+	// handling of path separators (/ vs \) per platform.
 
 	timeout := e.Timeout
 	if timeout <= 0 {
@@ -107,17 +158,14 @@ func (e *Executor) Run(ctx context.Context, command string, stdinData []byte, ex
 	return HookResult{Output: output}
 }
 
-// expandHome replaces leading ~ with the user's home directory.
-func expandHome(path string) string {
-	if path == "" || path[0] != '~' {
-		return path
+// guardCommand checks a command against dangerous patterns.
+// Returns a non-empty reason string if the command should be blocked.
+func guardCommand(command string) string {
+	lower := strings.ToLower(strings.TrimSpace(command))
+	for _, pattern := range dangerousCmdPatterns {
+		if pattern.MatchString(lower) {
+			return fmt.Sprintf("dangerous pattern detected: %s", pattern.String())
+		}
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	if len(path) > 1 && path[1] == '/' {
-		return home + path[1:]
-	}
-	return home
+	return ""
 }

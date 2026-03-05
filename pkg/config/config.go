@@ -604,18 +604,25 @@ type HookRuleConfig struct {
 
 // HooksConfig defines user-configurable hooks at key lifecycle points.
 // Each event maps to a list of hook rules that are executed sequentially.
-// Default is empty (no hooks). See pkg/hooks for event documentation.
+// Default is disabled (no hooks). Set Enabled to true and configure event
+// rules to activate. See pkg/hooks for event documentation.
 type HooksConfig struct {
+	Enabled     bool             `json:"enabled"`              // Master switch; false = all hooks disabled
 	PreMessage  []HookRuleConfig `json:"PreMessage,omitempty"`
 	PostMessage []HookRuleConfig `json:"PostMessage,omitempty"`
 	PreToolUse  []HookRuleConfig `json:"PreToolUse,omitempty"`
 	PostToolUse []HookRuleConfig `json:"PostToolUse,omitempty"`
+	OnError     []HookRuleConfig `json:"OnError,omitempty"`
 }
 
-// IsEmpty returns true when no hook rules are configured.
+// IsEmpty returns true when hooks are disabled or no hook rules are configured.
 func (h HooksConfig) IsEmpty() bool {
+	if !h.Enabled {
+		return true
+	}
 	return len(h.PreMessage) == 0 && len(h.PostMessage) == 0 &&
-		len(h.PreToolUse) == 0 && len(h.PostToolUse) == 0
+		len(h.PreToolUse) == 0 && len(h.PostToolUse) == 0 &&
+		len(h.OnError) == 0
 }
 
 type ToolsConfig struct {

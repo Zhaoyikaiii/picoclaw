@@ -33,6 +33,11 @@ const (
 	// PostToolUse fires after a tool's Execute method completes.
 	// inject_output appends hook stdout to result.ForLLM.
 	PostToolUse Event = "PostToolUse"
+
+	// OnError fires when a tool execution results in an error (result.IsError).
+	// This is a dedicated event for error-specific hooks (alerting, auditing,
+	// auto-remediation) so users don't have to check tool_error in PostToolUse.
+	OnError Event = "OnError"
 )
 
 // HookRule defines a single hook configuration entry.
@@ -59,6 +64,7 @@ type HookPayload struct {
 	ToolArgs   map[string]any `json:"tool_args,omitempty"`
 	ToolOutput string         `json:"tool_output,omitempty"`
 	ToolError  bool           `json:"tool_error,omitempty"`
+	ToolAsync  bool           `json:"tool_async,omitempty"`
 	Channel    string         `json:"channel,omitempty"`
 	ChatID     string         `json:"chat_id,omitempty"`
 	Message    string         `json:"message,omitempty"`
@@ -257,6 +263,11 @@ func buildEnvVars(payload HookPayload) []string {
 		env = append(env, "PICOCLAW_TOOL_ERROR=true")
 	} else {
 		env = append(env, "PICOCLAW_TOOL_ERROR=false")
+	}
+	if payload.ToolAsync {
+		env = append(env, "PICOCLAW_TOOL_ASYNC=true")
+	} else {
+		env = append(env, "PICOCLAW_TOOL_ASYNC=false")
 	}
 	if payload.Channel != "" {
 		env = append(env, "PICOCLAW_CHANNEL="+payload.Channel)
